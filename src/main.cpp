@@ -134,6 +134,7 @@ void loop() {
         if (currentMotion && !motionDetected) {
             motionCount++;
             lastMotionTime = millis();
+            Serial.printf("📡 Radar: MOVIMIENTO detectado (evento #%d)\n", motionCount);
         }
         motionDetected = currentMotion;
         
@@ -156,17 +157,19 @@ void loop() {
         lastScan = millis();
     }
 
-    // Leer DHT22 cada 2 segundos
+    // Leer LC-226 cada 2 segundos
     if (millis() - lastDhtRead > DHT_READ_INTERVAL) {
         float t = dht.readTemperature();
         float h = dht.readHumidity();
         if (isnan(t) || isnan(h)) {
-            Serial.println("⚠️ LC-226: lectura fallida - verifica cables VCC/DATA/GND");
+            Serial.println("⚠️ LC-226: sin respuesta - verifica cables o resistencia 10K");
         } else {
             currentTemp = t;
             currentHumidity = h;
             Serial.printf("🌡️ %.1f°C | 💧 %.1f%%\n", currentTemp, currentHumidity);
         }
+        // Status combo: radar + sensor
+        Serial.printf("📊 Radar: %s | Eventos: %d\n", motionDetected ? "ACTIVO" : "inactivo", motionCount);
         lastDhtRead = millis();
     }
     
