@@ -24,7 +24,7 @@ const char* password = "khce2946";
 
 // Pines
 #define PIR_PIN 13         // RCWL-0516 radar de microondas (OUT)
-#define DHT_PIN 15         // LC-226 DATA (sensor analógico)
+#define DHT_PIN 34         // LC-226 DATA (ADC1 - compatible con WiFi)
 
 // ==================== VARIABLES ====================
 
