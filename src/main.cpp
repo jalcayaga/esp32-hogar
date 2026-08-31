@@ -12,6 +12,7 @@
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
+#include <DHT.h>
 #include "network/guardian.h"
 #include "presence.h"
 #include "heatmap.h"
@@ -24,13 +25,13 @@ const char* password = "khce2946";
 
 // Pines
 #define PIR_PIN 13         // RCWL-0516 radar de microondas (OUT)
-#define DHT_PIN 34         // LC-226 DATA (ADC1 - compatible con WiFi)
+#define DHT_PIN 34         // CNT5/DHT11 DATA (ADC1)
 
 // ==================== VARIABLES ====================
 
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
-// LC-226 es sensor ANALÓGICO, no DHT
+DHT dht(DHT_PIN, DHT11);
 NetworkGuardian guardian;
 PresenceDetector presence;
 HeatmapGenerator heatmap;
@@ -39,7 +40,7 @@ NetworkScanner scanner;
 // WiFi scan cache
 String cachedWifiJson = "{}";
 
-// Datos LC-226 (cache cada 2 segundos)
+// Datos DHT11/CNT5 (cache cada 2 segundos)
 float currentTemp = 0;
 float currentHumidity = 0;
 unsigned long lastSensorRead = 0;
@@ -65,9 +66,9 @@ void setup() {
     // RCWL-0516 radar
     pinMode(PIR_PIN, INPUT);
 
-    // LC-226 sensor analógico
-    analogReadResolution(12);  // 12 bits (0-4095)
-    Serial.println("✅ LC-226 OK (analog, pin " + String(DHT_PIN) + ")");
+    // DHT11/CNT5 sensor digital
+    dht.begin();
+    Serial.println("✅ CNT5/DHT11 OK (pin " + String(DHT_PIN) + ")");
 
     // WiFi
     WiFi.begin(ssid, password);
@@ -104,10 +105,17 @@ void setup() {
     Serial.println("✅ Servidor web OK");
     Serial.println("🌐 Abre http://" + WiFi.localIP().toString());
 
-    // Lectura inicial LC-226
-    delay(1000);
-    int raw = analogRead(DHT_PIN);
-    Serial.printf("📊 LC-226 raw: %d (0-4095)\n", raw);
+    // Lectura inicial DHT11
+    delay(2000);
+    float t = dht.readTemperature();
+    float h = dht.readHumidity();
+    if (isnan(t) || isnan(h)) {
+        Serial.println("⚠️ CNT5/DHT11 no responde - verifica cables");
+    } else {
+        currentTemp = t;
+        currentHumidity = h;
+        Serial.printf("🌡️ %.1f°C | 💧 %.1f%%\n", t, h);
+    }
 }
 
 // ==================== LOOP ====================
@@ -144,22 +152,17 @@ void loop() {
         lastScan = millis();
     }
 
-    // Leer LC-226 cada 2 segundos (analógico)
+    // Leer DHT11 cada 2 segundos
     if (millis() - lastSensorRead > SENSOR_READ_INTERVAL) {
-        int raw = analogRead(DHT_PIN);
-        
-        // LC-226: voltaje proporcional a temperatura/humedad
-        // Conversión aproximada (ajustar según calibración)
-        float voltage = (raw / 4095.0) * 3.3;  // ESP32 lee max 3.3V
-        currentTemp = voltage * 20.0;           // Factor aproximado
-        currentHumidity = voltage * 30.0;       // Factor aproximado
-        
-        // Limitar valores razonables
-        currentTemp = constrain(currentTemp, -10.0, 60.0);
-        currentHumidity = constrain(currentHumidity, 0.0, 100.0);
-        
-        Serial.printf("📊 Raw: %d | Voltaje: %.2fV | 🌡️ %.1f°C | 💧 %.1f%%\n", 
-                      raw, voltage, currentTemp, currentHumidity);
+        float t = dht.readTemperature();
+        float h = dht.readHumidity();
+        if (isnan(t) || isnan(h)) {
+            Serial.println("⚠️ CNT5/DHT11: sin respuesta");
+        } else {
+            currentTemp = t;
+            currentHumidity = h;
+            Serial.printf("🌡️ %.1f°C | 💧 %.1f%%\n", t, h);
+        }
         Serial.printf("   Radar: %s | Eventos: %d\n", 
                       motionDetected ? "ACTIVO" : "inactivo", motionCount);
         lastSensorRead = millis();
