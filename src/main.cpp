@@ -69,7 +69,7 @@ void setup() {
 
     // DHT22 sensor
     dht.begin();
-    Serial.println("✅ DHT22 OK (pin " + String(DHT_PIN) + ")");
+    Serial.println("✅ LC-226 OK (DHT11, pin " + String(DHT_PIN) + ")");
 
     // WiFi
     WiFi.begin(ssid, password);
@@ -111,7 +111,7 @@ void setup() {
     float t = dht.readTemperature();
     float h = dht.readHumidity();
     if (isnan(t) || isnan(h)) {
-        Serial.println("⚠️ DHT22 NO responde - verifica:");
+        Serial.println("⚠️ LC-226 NO responde - verifica:");
         Serial.println("   1. Cable VCC → 3.3V o 5V");
         Serial.println("   2. Cable DATA → GPIO4");
         Serial.println("   3. Cable GND → GND");
@@ -161,7 +161,7 @@ void loop() {
         float t = dht.readTemperature();
         float h = dht.readHumidity();
         if (isnan(t) || isnan(h)) {
-            Serial.println("⚠️ DHT22: lectura fallida - verifica cables VCC/DATA/GND");
+            Serial.println("⚠️ LC-226: lectura fallida - verifica cables VCC/DATA/GND");
         } else {
             currentTemp = t;
             currentHumidity = h;
