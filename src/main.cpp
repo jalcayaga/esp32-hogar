@@ -26,6 +26,8 @@ const char* password = "khce2946";
 // Pines
 #define PIR_PIN 13         // RCWL-0516 radar de microondas (OUT)
 #define DHT_PIN 32         // CNT5/DHT11 DATA (ADC1 + OUTPUT)
+#define MQ2_PIN 35         // MQ-2 Gas Sensor (ADC1 - analógico)
+#define MQ2_DIGITAL 27     // MQ-2 D0 (digital - umbral)
 
 // ==================== VARIABLES ====================
 
@@ -45,6 +47,13 @@ float currentTemp = 0;
 float currentHumidity = 0;
 unsigned long lastSensorRead = 0;
 #define SENSOR_READ_INTERVAL 2000
+
+// Datos MQ-2 Gas Sensor
+int mq2Raw = 0;
+float mq2Voltage = 0;
+bool mq2Alarm = false;
+unsigned long lastMq2Read = 0;
+#define MQ2_READ_INTERVAL 1000  // Más rápido que DHT11
 
 // Forward declarations
 void setupWebServer();
@@ -69,6 +78,10 @@ void setup() {
     // DHT11/CNT5 sensor digital
     dht.begin();
     Serial.println("✅ CNT5/DHT11 OK (pin " + String(DHT_PIN) + ")");
+    
+    // MQ-2 Gas Sensor
+    pinMode(MQ2_DIGITAL, INPUT);
+    Serial.println("✅ MQ-2 Gas OK (A0: " + String(MQ2_PIN) + ", D0: " + String(MQ2_DIGITAL) + ")");
 
     // WiFi
     WiFi.begin(ssid, password);
@@ -166,6 +179,23 @@ void loop() {
         Serial.printf("   Radar: %s | Eventos: %d\n", 
                       motionDetected ? "ACTIVO" : "inactivo", motionCount);
         lastSensorRead = millis();
+    }
+    
+    // Leer MQ-2 cada 1 segundo
+    if (millis() - lastMq2Read > MQ2_READ_INTERVAL) {
+        mq2Raw = analogRead(MQ2_PIN);
+        mq2Voltage = (mq2Raw / 4095.0) * 3.3;
+        mq2Alarm = digitalRead(MQ2_DIGITAL) == LOW;  // LOW = gas detectado
+        
+        String gasLevel = "Normal";
+        if (mq2Raw > 2000) gasLevel = "⚠️ Medio";
+        if (mq2Raw > 3000) gasLevel = "🔴 ALTO";
+        if (mq2Alarm) gasLevel = "🚨 ALARMA";
+        
+        Serial.printf("🔥 MQ-2: %d (%.2fV) %s", mq2Raw, mq2Voltage, gasLevel.c_str());
+        Serial.printf(" | 🌡️ %.1f°C 💧 %.1f%%", currentTemp, currentHumidity);
+        Serial.printf(" | Radar: %s\n", motionDetected ? "ACTIVO" : "-");
+        lastMq2Read = millis();
     }
     
     // Broadcast waveform cada 200ms via WebSocket
@@ -404,6 +434,11 @@ void setupWebServer() {
             <div class="value" id="humidity">--%</div>
             <div class="label">Humedad</div>
         </div>
+        <div class="card" id="gasCard">
+            <div class="icon">🔥</div>
+            <div class="value" id="gasLevel">Normal</div>
+            <div class="label">Gas / Humo</div>
+        </div>
     </div>
 
     <div class="section">
@@ -602,6 +637,16 @@ void setupWebServer() {
                 document.getElementById('rssi').textContent = d.wifiRSSI;
                 document.getElementById('temperature').textContent = d.temperature.toFixed(1) + '°C';
                 document.getElementById('humidity').textContent = d.humidity.toFixed(1) + '%';
+                // MQ-2 Gas Sensor
+                const gasCard = document.getElementById('gasCard');
+                let gasText = 'Normal';
+                let gasColor = '#22c55e';
+                if (d.gasAlarm) { gasText = '🚨 ALARMA'; gasColor = '#ef4444'; }
+                else if (d.gasRaw > 3000) { gasText = '🔴 ALTO'; gasColor = '#ef4444'; }
+                else if (d.gasRaw > 2000) { gasText = '⚠️ Medio'; gasColor = '#f59e0b'; }
+                document.getElementById('gasLevel').textContent = gasText;
+                document.getElementById('gasLevel').style.color = gasColor;
+                gasCard.style.borderColor = gasColor;
             } catch (e) { showError('Error cargando dashboard'); console.error(e); }
         }
 
@@ -1121,6 +1166,9 @@ void setupWebServer() {
         doc["stealthMode"] = guardian.isStealthMode();
         doc["temperature"] = currentTemp;
         doc["humidity"] = currentHumidity;
+        doc["gasRaw"] = mq2Raw;
+        doc["gasVoltage"] = mq2Voltage;
+        doc["gasAlarm"] = mq2Alarm;
         String response;
         serializeJson(doc, response);
         request->send(200, "application/json", response);
