@@ -25,7 +25,7 @@ const char* password = "khce2946";
 
 // Pines
 #define PIR_PIN 13         // RCWL-0516 radar de microondas (OUT)
-#define DHT_PIN 13         // LC-226 DATA (antes era pin del radar)
+#define DHT_PIN 15         // LC-226 DATA (sensor temp/humedad)
 #define DHT_TYPE DHT11    // LC-226 usa protocolo DHT compatible
 
 // ==================== VARIABLES ====================
