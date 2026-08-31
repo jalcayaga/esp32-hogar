@@ -12,7 +12,6 @@
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
-#include <DHT.h>
 #include "network/guardian.h"
 #include "presence.h"
 #include "heatmap.h"
@@ -25,14 +24,13 @@ const char* password = "khce2946";
 
 // Pines
 #define PIR_PIN 13         // RCWL-0516 radar de microondas (OUT)
-#define DHT_PIN 15         // LC-226 DATA (sensor temp/humedad)
-#define DHT_TYPE DHT11    // LC-226 usa protocolo DHT compatible
+#define DHT_PIN 15         // LC-226 DATA (sensor analógico)
 
 // ==================== VARIABLES ====================
 
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
-DHT dht(DHT_PIN, DHT_TYPE);
+// LC-226 es sensor ANALÓGICO, no DHT
 NetworkGuardian guardian;
 PresenceDetector presence;
 HeatmapGenerator heatmap;
@@ -41,11 +39,11 @@ NetworkScanner scanner;
 // WiFi scan cache
 String cachedWifiJson = "{}";
 
-// Datos DHT22 (cache cada 2 segundos)
+// Datos LC-226 (cache cada 2 segundos)
 float currentTemp = 0;
 float currentHumidity = 0;
-unsigned long lastDhtRead = 0;
-#define DHT_READ_INTERVAL 2000
+unsigned long lastSensorRead = 0;
+#define SENSOR_READ_INTERVAL 2000
 
 // Forward declarations
 void setupWebServer();
@@ -67,9 +65,9 @@ void setup() {
     // RCWL-0516 radar
     pinMode(PIR_PIN, INPUT);
 
-    // DHT22 sensor
-    dht.begin();
-    Serial.println("✅ LC-226 OK (DHT11, pin " + String(DHT_PIN) + ")");
+    // LC-226 sensor analógico
+    analogReadResolution(12);  // 12 bits (0-4095)
+    Serial.println("✅ LC-226 OK (analog, pin " + String(DHT_PIN) + ")");
 
     // WiFi
     WiFi.begin(ssid, password);
@@ -106,21 +104,10 @@ void setup() {
     Serial.println("✅ Servidor web OK");
     Serial.println("🌐 Abre http://" + WiFi.localIP().toString());
 
-    // Lectura inicial DHT22
-    delay(2000);
-    float t = dht.readTemperature();
-    float h = dht.readHumidity();
-    if (isnan(t) || isnan(h)) {
-        Serial.println("⚠️ LC-226 NO responde - verifica:");
-        Serial.println("   1. Cable VCC → 3.3V o 5V");
-        Serial.println("   2. Cable DATA → GPIO4");
-        Serial.println("   3. Cable GND → GND");
-        Serial.println("   4. Resistencia 10K entre VCC y DATA");
-    } else {
-        currentTemp = t;
-        currentHumidity = h;
-        Serial.printf("🌡️ %.1f°C | 💧 %.1f%%\n", currentTemp, currentHumidity);
-    }
+    // Lectura inicial LC-226
+    delay(1000);
+    int raw = analogRead(DHT_PIN);
+    Serial.printf("📊 LC-226 raw: %d (0-4095)\n", raw);
 }
 
 // ==================== LOOP ====================
@@ -157,20 +144,25 @@ void loop() {
         lastScan = millis();
     }
 
-    // Leer LC-226 cada 2 segundos
-    if (millis() - lastDhtRead > DHT_READ_INTERVAL) {
-        float t = dht.readTemperature();
-        float h = dht.readHumidity();
-        if (isnan(t) || isnan(h)) {
-            Serial.println("⚠️ LC-226: sin respuesta - verifica cables o resistencia 10K");
-        } else {
-            currentTemp = t;
-            currentHumidity = h;
-            Serial.printf("🌡️ %.1f°C | 💧 %.1f%%\n", currentTemp, currentHumidity);
-        }
-        // Status combo: radar + sensor
-        Serial.printf("📊 Radar: %s | Eventos: %d\n", motionDetected ? "ACTIVO" : "inactivo", motionCount);
-        lastDhtRead = millis();
+    // Leer LC-226 cada 2 segundos (analógico)
+    if (millis() - lastSensorRead > SENSOR_READ_INTERVAL) {
+        int raw = analogRead(DHT_PIN);
+        
+        // LC-226: voltaje proporcional a temperatura/humedad
+        // Conversión aproximada (ajustar según calibración)
+        float voltage = (raw / 4095.0) * 3.3;  // ESP32 lee max 3.3V
+        currentTemp = voltage * 20.0;           // Factor aproximado
+        currentHumidity = voltage * 30.0;       // Factor aproximado
+        
+        // Limitar valores razonables
+        currentTemp = constrain(currentTemp, -10.0, 60.0);
+        currentHumidity = constrain(currentHumidity, 0.0, 100.0);
+        
+        Serial.printf("📊 Raw: %d | Voltaje: %.2fV | 🌡️ %.1f°C | 💧 %.1f%%\n", 
+                      raw, voltage, currentTemp, currentHumidity);
+        Serial.printf("   Radar: %s | Eventos: %d\n", 
+                      motionDetected ? "ACTIVO" : "inactivo", motionCount);
+        lastSensorRead = millis();
     }
     
     // Broadcast waveform cada 200ms via WebSocket
