@@ -25,7 +25,7 @@ const char* password = "khce2946";
 
 // Pines
 #define PIR_PIN 13         // RCWL-0516 radar de microondas (OUT)
-#define DHT_PIN 4          // DHT22 DATA (sensor celeste cuadrado)
+#define DHT_PIN 15         // DHT22 DATA (sensor celeste cuadrado)
 #define DHT_TYPE DHT22
 
 // ==================== VARIABLES ====================
