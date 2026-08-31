@@ -1,7 +1,7 @@
 /**
  * 🏠 ESP32 Hogar - Agente de Monitoreo de Red
  * 
- * Hardware actual: ESP32 + Display TFT 1.8" + PIR HC-SR501
+ * Hardware: ESP32 + Radar RCWL-0516 + DHT22 (temp/humedad)
  * Protector de red con modo agente oculto.
  * 
  * Para el curso de ciberseguridad.
@@ -10,13 +10,9 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <AsyncTCP.h>
-// WebSocket está incluido en ESPAsyncWebServer
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
-#include <SPI.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_ST7735.h>
-#include <Adafruit_ST7789.h>
+#include <DHT.h>
 #include "network/guardian.h"
 #include "presence.h"
 #include "heatmap.h"
@@ -29,44 +25,33 @@ const char* password = "khce2946";
 
 // Pines
 #define PIR_PIN 13         // RCWL-0516 radar de microondas (OUT)
-
-// TFT Display (1.8" ST7735)
-#define TFT_CS   22
-#define TFT_RST  17         // Reset display (movido para no chocar con MOSI)
-#define TFT_DC   21         // A0 / Data-Command
-
-// Colores RGB565
-#define COLOR_BG     0x0000
-#define COLOR_TEXT   0xFFFF
-#define COLOR_GREEN  0x07E0
-#define COLOR_RED    0xF800
-#define COLOR_YELLOW 0xFFE0
-#define COLOR_CYAN   0x07FF
+#define DHT_PIN 4          // DHT22 DATA (sensor celeste cuadrado)
+#define DHT_TYPE DHT22
 
 // ==================== VARIABLES ====================
 
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
-Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
+DHT dht(DHT_PIN, DHT_TYPE);
 NetworkGuardian guardian;
 PresenceDetector presence;
 HeatmapGenerator heatmap;
 NetworkScanner scanner;
 
-// WiFi scan cache (evita escanear en cada request)
+// WiFi scan cache
 String cachedWifiJson = "{}";
-String cachedScanJson = "[]";
-String cachedScanStatsJson = "{}";
+
+// Datos DHT22 (cache cada 2 segundos)
+float currentTemp = 0;
+float currentHumidity = 0;
+unsigned long lastDhtRead = 0;
+#define DHT_READ_INTERVAL 2000
 
 // Forward declarations
-void updateDisplay();
 void setupWebServer();
 void broadcastPresence();
 void broadcastWaveform();
 void cachedWifiScan();
-
-unsigned long lastDisplayUpdate = 0;
-#define DISPLAY_UPDATE_INTERVAL 2000  // Cada 2 segundos para evitar parpadeo
 
 // Datos del radar RCWL-0516
 bool motionDetected = false;
@@ -82,17 +67,9 @@ void setup() {
     // RCWL-0516 radar
     pinMode(PIR_PIN, INPUT);
 
-    // Display TFT - inicialización correcta
-    Serial.println("Inicializando display...");
-    tft.initR(INITR_BLACKTAB);  // Display 1.8" ST7735
-    tft.setRotation(1);
-    tft.fillScreen(COLOR_BG);
-    tft.setTextColor(COLOR_GREEN);
-    tft.setTextSize(1);
-    tft.setCursor(10, 10);
-    tft.println("ESP32 Hogar");
-    tft.println("Iniciando...");
-    Serial.println("✅ Display OK");
+    // DHT22 sensor
+    dht.begin();
+    Serial.println("✅ DHT22 OK (pin " + String(DHT_PIN) + ")");
 
     // WiFi
     WiFi.begin(ssid, password);
@@ -129,10 +106,11 @@ void setup() {
     Serial.println("✅ Servidor web OK");
     Serial.println("🌐 Abre http://" + WiFi.localIP().toString());
 
-    // Display inicial
+    // Lectura inicial DHT22
     delay(2000);
-    tft.fillScreen(COLOR_BG);
-    updateDisplay();
+    currentTemp = dht.readTemperature();
+    currentHumidity = dht.readHumidity();
+    Serial.printf("🌡️ %.1f°C | 💧 %.1f%%\n", currentTemp, currentHumidity);
 }
 
 // ==================== LOOP ====================
@@ -168,10 +146,15 @@ void loop() {
         lastScan = millis();
     }
 
-    // Actualizar display cada segundo
-    if (millis() - lastDisplayUpdate > DISPLAY_UPDATE_INTERVAL) {
-        updateDisplay();
-        lastDisplayUpdate = millis();
+    // Leer DHT22 cada 2 segundos
+    if (millis() - lastDhtRead > DHT_READ_INTERVAL) {
+        float t = dht.readTemperature();
+        float h = dht.readHumidity();
+        if (!isnan(t) && !isnan(h)) {
+            currentTemp = t;
+            currentHumidity = h;
+        }
+        lastDhtRead = millis();
     }
     
     // Broadcast waveform cada 200ms via WebSocket
@@ -184,77 +167,7 @@ void loop() {
     delay(10);
 }
 
-// ==================== DISPLAY ====================
 
-void updateDisplay() {
-    tft.fillScreen(0x0000);  // Negro puro, limpiar todo
-
-    // Título
-    tft.setTextColor(COLOR_CYAN);
-    tft.setTextSize(1);
-    tft.setCursor(5, 5);
-    tft.println("=== HOGAR ESP32 ===");
-    tft.drawFastHLine(5, 15, 120, COLOR_CYAN);
-
-    // Movimiento
-    tft.setCursor(5, 25);
-    tft.setTextColor(COLOR_TEXT);
-    tft.print("Movimiento: ");
-    tft.setTextColor(motionDetected ? COLOR_RED : COLOR_GREEN);
-    tft.println(motionDetected ? "SI" : "No");
-
-    // Conteo de eventos
-    tft.setCursor(5, 40);
-    tft.setTextColor(COLOR_TEXT);
-    tft.print("Eventos: ");
-    tft.setTextColor(COLOR_YELLOW);
-    tft.println(motionCount);
-
-    // Último movimiento
-    tft.setCursor(5, 55);
-    tft.setTextColor(COLOR_TEXT);
-    tft.print("Ultimo: ");
-    if (lastMotionTime > 0) {
-        unsigned long ago = (millis() - lastMotionTime) / 1000;
-        tft.print(ago);
-        tft.println("s");
-    } else {
-        tft.println("nunca");
-    }
-
-    // Separador
-    tft.drawFastHLine(5, 70, 120, COLOR_CYAN);
-
-    // Protector de red
-    tft.setCursor(5, 80);
-    tft.setTextColor(COLOR_GREEN);
-    tft.println("Protector de Red");
-
-    tft.setCursor(5, 95);
-    tft.setTextColor(COLOR_TEXT);
-    tft.print("Dispositivos: ");
-    tft.setTextColor(COLOR_YELLOW);
-    tft.println(guardian.getDeviceCount());
-
-    // IP
-    tft.setCursor(5, 115);
-    tft.setTextColor(COLOR_TEXT);
-    tft.print("IP: ");
-    tft.println(WiFi.localIP());
-
-    // WiFi
-    tft.setCursor(5, 130);
-    tft.setTextColor(WiFi.status() == WL_CONNECTED ? COLOR_GREEN : COLOR_RED);
-    tft.print("WiFi: ");
-    tft.println(WiFi.status() == WL_CONNECTED ? "OK" : "ERR");
-
-    // RSSI
-    tft.setCursor(5, 145);
-    tft.setTextColor(COLOR_TEXT);
-    tft.print("Signal: ");
-    tft.print(WiFi.RSSI());
-    tft.println(" dBm");
-}
 
 // ==================== WIFI SCAN CACHE ====================
 
@@ -470,6 +383,16 @@ void setupWebServer() {
             <div class="value" id="rssi">--</div>
             <div class="label">Signal (dBm)</div>
         </div>
+        <div class="card">
+            <div class="icon">🌡️</div>
+            <div class="value" id="temperature">--°C</div>
+            <div class="label">Temperatura</div>
+        </div>
+        <div class="card">
+            <div class="icon">💧</div>
+            <div class="value" id="humidity">--%</div>
+            <div class="label">Humedad</div>
+        </div>
     </div>
 
     <div class="section">
@@ -666,6 +589,8 @@ void setupWebServer() {
 
                 document.getElementById('devices').textContent = d.devicesOnNetwork;
                 document.getElementById('rssi').textContent = d.wifiRSSI;
+                document.getElementById('temperature').textContent = d.temperature.toFixed(1) + '°C';
+                document.getElementById('humidity').textContent = d.humidity.toFixed(1) + '%';
             } catch (e) { showError('Error cargando dashboard'); console.error(e); }
         }
 
@@ -1183,6 +1108,8 @@ void setupWebServer() {
         doc["wifiRSSI"] = WiFi.RSSI();
         doc["devicesOnNetwork"] = guardian.getDeviceCount();
         doc["stealthMode"] = guardian.isStealthMode();
+        doc["temperature"] = currentTemp;
+        doc["humidity"] = currentHumidity;
         String response;
         serializeJson(doc, response);
         request->send(200, "application/json", response);
